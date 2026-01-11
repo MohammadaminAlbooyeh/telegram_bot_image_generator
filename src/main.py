@@ -4,6 +4,7 @@ from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
 from openai import OpenAI
 from dotenv import load_dotenv
+from models import SessionLocal, User, ImageGeneration
 
 # Load environment variables
 load_dotenv()
@@ -26,6 +27,7 @@ async def generate_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
     prompt = ' '.join(context.args)
     await update.message.reply_text("Generating image... Please wait.")
 
+    db = SessionLocal()
     try:
         response = client.images.generate(
             model="dall-e-3",
@@ -37,6 +39,12 @@ async def generate_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         image_url = response.data[0].url
 
+        # Log to database
+        user_id = update.effective_user.id
+        generation = ImageGeneration(user_id=user_id, prompt=prompt, image_url=image_url)
+        db.add(generation)
+        db.commit()
+
         # Download the image
         image_response = requests.get(image_url)
         image_response.raise_for_status()
@@ -46,9 +54,26 @@ async def generate_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     except Exception as e:
         await update.message.reply_text(f"Sorry, I couldn't generate the image. Error: {str(e)}")
+    finally:
+        db.close()
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Hello! I'm an image generator bot. Use /generate <prompt> to create an image.")
+    db = SessionLocal()
+    try:
+        user = update.effective_user
+        db_user = db.query(User).filter(User.telegram_id == user.id).first()
+        if not db_user:
+            db_user = User(
+                telegram_id=user.id,
+                username=user.username,
+                first_name=user.first_name,
+                last_name=user.last_name
+            )
+            db.add(db_user)
+            db.commit()
+        await update.message.reply_text("Hello! I'm an image generator bot. Use /generate <prompt> to create an image.")
+    finally:
+        db.close()
 
 def main():
     application = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
